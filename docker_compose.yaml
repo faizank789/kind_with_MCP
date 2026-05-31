@@ -1,119 +1,82 @@
+version: "3.8"
+
 services:
 
+  # Ollama
   ollama:
-    image: ollama/ollama
-    container_name: ollama
+    image: ollama/ollama:latest
+    container_name: ollama-service
     restart: unless-stopped
     ports:
       - "11434:11434"
     volumes:
-      - ollama:/root/.ollama
+      - ollama_data:/root/.ollama
     networks:
-      - mcp-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      - mcp-network
 
-  ollama-init:
-    image: ollama/ollama
-    container_name: ollama-init
-    depends_on:
-      ollama:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        echo "Pulling qwen2.5:7b..."
-        ollama pull qwen2.5:7b
-        echo "Done."
-    environment:
-      - OLLAMA_HOST=http://ollama:11434
-    networks:
-      - mcp-net
-    restart: "no"
-
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: open-webui
-    restart: unless-stopped
-    ports:
-      - "3000:8080"
-    volumes:
-      - open-webui:/app/backend/data
-    environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - WEBUI_SECRET_KEY=changeme123
-      - TOOL_SERVER_CONNECTIONS=[{"type":"openapi","url":"http://mcpo:8082","spec_type":"url","path":"openapi.json","auth_type":"none","key":"","config":{"enable":true},"info":{"id":"kubernetes","name":"Kubernetes","description":"Kubernetes MCP Server"}}]
-    depends_on:
-      ollama:
-        condition: service_healthy
-      mcpo:
-        condition: service_healthy
-    networks:
-      - mcp-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-
+  # Kubernetes MCP Server
   kubernetes-mcp:
     image: ghcr.io/containers/kubernetes-mcp-server:latest
-    container_name: kubernetes-mcp
+    container_name: mcp-k8s-service
     restart: unless-stopped
+
+    environment:
+      KUBECONFIG: /app/kubeconfig
+
+    volumes:
+      - ./kubeconfig:/app/kubeconfig:ro
+
     ports:
       - "8081:8080"
-    volumes:
-      - ${KUBECONFIG:-~/.kube/config}:/tmp/kubeconfig:ro
-    environment:
-      - KUBECONFIG=/tmp/kubeconfig
-    command:
-      - --port
-      - "8080"
-      - --kubeconfig
-      - /tmp/kubeconfig
-    networks:
-      - mcp-net
-      - kind
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
-  mcpo:
-    image: ghcr.io/open-webui/mcpo:main
-    container_name: mcpo
-    restart: unless-stopped
-    ports:
-      - "8082:8082"
-    command:
-      - --port
-      - "8082"
-      - --type
-      - sse
-      - --
-      - http://kubernetes-mcp:8080/sse
-    depends_on:
-      kubernetes-mcp:
-        condition: service_started
     networks:
-      - mcp-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/openapi.json"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+      - mcp-network
+      - kind
+
+  # MCPO Bridge
+  mcpo-bridge:
+    image: ghcr.io/open-webui/mcpo:main
+    container_name: mcpo-service
+    restart: unless-stopped
+
+    depends_on:
+      - kubernetes-mcp
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./mcpo-config.json:/config.json:ro
+    command:
+      - --config
+      - /config.json
+    networks:
+      - mcp-network
+  # Open WebUI
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: webui-service
+    restart: unless-stopped
+
+    depends_on:
+      - ollama
+
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+
+    ports:
+      - "3000:8080"
+
+    volumes:
+      - open-webui_data:/app/backend/data
+
+    networks:
+      - mcp-network
+volumes:
+  ollama_data:
+  open-webui_data:
 
 networks:
-  mcp-net:
+  mcp-network:
     driver: bridge
+
   kind:
     external: true
-    name: kind
-
-volumes:
-  ollama:
-  open-webui:
