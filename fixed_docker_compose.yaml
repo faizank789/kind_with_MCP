@@ -1,0 +1,52 @@
+version: "3.8"
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-service
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - mcp-network
+
+  kubernetes-mcp:
+    image: ghcr.io/containers/kubernetes-mcp-server:latest
+    container_name: mcp-k8s-service
+    restart: unless-stopped
+    environment:
+      KUBECONFIG: /app/kubeconfig
+    volumes:
+      - ./kubeconfig:/app/kubeconfig:ro
+    ports:
+      - "8081:8080"
+    networks:
+      - mcp-network
+      - kind
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: webui-service
+    restart: unless-stopped
+    depends_on:
+      - ollama
+      - kubernetes-mcp
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      WEBUI_SECRET_KEY: "mysecretkey123"
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui_data:/app/backend/data
+    networks:
+      - mcp-network        # ✅ only mcp-network needed - kubernetes-mcp is reachable here
+
+volumes:
+  ollama_data:
+  open-webui_data:
+
+networks:
+  mcp-network:
+    driver: bridge
+  kind:
+    external: true
